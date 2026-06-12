@@ -1,0 +1,9 @@
+modal>=0.64.0
+ultralytics>=8.3.0
+torch>=2.4.0
+torchvision>=0.19.0
+sam2>=1.0.0
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+Pillow>=10.0.0
+huggingface_hub>=0.24.0

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.env
+.env.local
+
+# Node
+node_modules/
+.next/
+out/
+
+# Data — large training sets and videos, not tracked in git
+data/
+
+# Logs
+logs/
+
+# Modal
+.modal/
+
+# Uploads
+/tmp/polyp-uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
