@@ -34,6 +34,7 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [result, setResult] = useState<InferResult | null>(null);
   const [groundTruth, setGroundTruth] = useState<GtData | null>(null);
+  const [showGt, setShowGt] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const gtInputRef = useRef<HTMLInputElement>(null);
@@ -49,6 +50,7 @@ export default function Home() {
       setVideoUrl(null);
       setError(null);
       setGroundTruth(null);
+      setShowGt(false);
     }
   }
 
@@ -73,29 +75,31 @@ export default function Home() {
     }
   }
 
-  async function handleUpload(file: File) {
+  async function handleUpload(file: File, gtUrl?: string) {
     setError(null);
     setGroundTruth(null);
+    setShowGt(false);
     const localUrl = URL.createObjectURL(file);
     setVideoUrl(localUrl);
     setStage("processing");
 
-    const form = new FormData();
-    form.append("file", file);
+    const [inferRes, gtData] = await Promise.all([
+      fetch(`${API}/api/infer-video`, { method: "POST", body: (() => { const f = new FormData(); f.append("file", file); return f; })() }),
+      gtUrl ? fetch(gtUrl).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
+    ]);
 
-    const res = await fetch(`${API}/api/infer-video`, {
-      method: "POST",
-      body: form,
-    });
-
-    if (!res.ok) {
+    if (!inferRes.ok) {
       setError("Inference failed. Check backend logs.");
       setStage("ready");
       return;
     }
 
-    const data: InferResult = await res.json();
+    const data: InferResult = await inferRes.json();
     setResult(data);
+    if (gtData) {
+      setGroundTruth(gtData as GtData);
+      setShowGt(true);
+    }
     setStage("done");
   }
 
@@ -104,7 +108,7 @@ export default function Home() {
     if (!file) return;
     const text = await file.text();
     setGroundTruth(JSON.parse(text) as GtData);
-    // reset input so same file can be re-selected
+    setShowGt(true);
     e.target.value = "";
   }
 
@@ -114,6 +118,7 @@ export default function Home() {
     setResult(null);
     setVideoUrl(null);
     setGroundTruth(null);
+    setShowGt(false);
   }
 
   return (
@@ -239,28 +244,43 @@ export default function Home() {
             fps={result.fps}
             width={result.width}
             height={result.height}
-            groundTruth={groundTruth?.frames}
+            groundTruth={showGt ? groundTruth?.frames : undefined}
           />
 
-          {/* Ground truth loader */}
+          {/* Ground truth panel */}
           <div className={`rounded-xl border px-4 py-3 flex items-center justify-between transition-colors ${
-            groundTruth ? "border-cyan-800 bg-cyan-950/20" : "border-gray-700 bg-gray-900/50"
+            groundTruth && showGt ? "border-cyan-800 bg-cyan-950/20" : "border-gray-700 bg-gray-900/50"
           }`}>
             {groundTruth ? (
               <>
-                <span className="text-sm text-cyan-400">Ground truth loaded · cyan boxes active</span>
-                <button
-                  onClick={() => setGroundTruth(null)}
-                  className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-                >
-                  Remove
-                </button>
+                <div className="flex items-center gap-3">
+                  <span className="inline-block w-3 h-3 rounded-sm flex-shrink-0" style={{ background: "#22d3ee" }} />
+                  <span className="text-sm text-gray-300">Ground Truth Labels</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowGt((v) => !v)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                      showGt ? "bg-cyan-600" : "bg-gray-600"
+                    }`}
+                    role="switch"
+                    aria-checked={showGt}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      showGt ? "translate-x-6" : "translate-x-1"
+                    }`} />
+                  </button>
+                  <button
+                    onClick={() => { setGroundTruth(null); setShowGt(false); }}
+                    className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
               </>
             ) : (
               <>
-                <span className="text-sm text-gray-400">
-                  Want to compare with ground truth?
-                </span>
+                <span className="text-sm text-gray-400">Want to compare with ground truth?</span>
                 <button
                   onClick={() => gtInputRef.current?.click()}
                   className="text-sm px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-white transition-colors"

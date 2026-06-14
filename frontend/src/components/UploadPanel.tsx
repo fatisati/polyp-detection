@@ -2,9 +2,10 @@
 
 import { useRef, useState } from "react";
 import DemoVideoPicker from "./DemoVideoPicker";
+import { DEMO_VIDEOS } from "./demos";
 
 interface Props {
-  onUpload: (file: File) => void;
+  onUpload: (file: File, gtUrl?: string) => void;
 }
 
 export default function UploadPanel({ onUpload }: Props) {
@@ -28,10 +29,12 @@ export default function UploadPanel({ onUpload }: Props) {
   async function handleDemoSelect(filename: string) {
     setLoadingDemo(filename);
     try {
+      const demo = DEMO_VIDEOS.find((v) => v.file === filename);
       const res = await fetch(`/demos/${filename}`);
       const blob = await res.blob();
       const file = new File([blob], filename, { type: blob.type || "video/mp4" });
-      onUpload(file);
+      const gtUrl = demo?.gtFile ? `/demos/gt/${demo.gtFile}` : undefined;
+      onUpload(file, gtUrl);
     } finally {
       setLoadingDemo(null);
     }
