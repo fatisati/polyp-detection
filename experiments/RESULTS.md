@@ -110,3 +110,42 @@ trim; the frame data isn't the bottleneck.
 - Pipelining (frame N+1 sent before frame N's result returns) raises achievable fps but does
   **not** reduce the lag of any single frame — doesn't address the "boxes lag when the camera
   moves" complaint by itself, only throughput.
+
+## Part 3: would CPU inference on our own server be faster?
+
+Tested directly (not theoretical): installed CPU-only PyTorch + ultralytics in an isolated venv
+on the same Helsinki server, downloaded the real weights, ran the actual model with zero network
+hop involved (`experiments/cpu_inference_bench.py`, 20 timed calls per width, 3 warmup).
+
+| width | mean (ms) | p50 | p90 | max |
+|---|---|---|---|---|
+| 160 | 808.7 | 812.5 | 820.9 | 830.7 |
+| 320 | 804.9 | 804.0 | 839.1 | 851.7 |
+| 640 | 788.4 | 786.8 | 807.4 | 808.5 |
+
+**No — CPU on our own server is ~3x slower than what we have now** (~800ms vs. the current
+~250-260ms Modal round trip), even with the network hop completely eliminated. This model needs
+GPU acceleration: ~11ms on the A100 vs. ~800ms on 8 CPU cores is a ~70x speedup, which more than
+absorbs the transatlantic network penalty. Latency is flat across resize widths here too — same
+reason as the GPU case: the model resizes its input internally regardless of what we hand it.
+(Venv and downloaded weights removed after the test — this server is at ~95% disk.)
+
+## Where this leaves us
+
+GPU compute is fast (~11ms) and not the bottleneck. Network distance to Modal's US infrastructure
+is ~95% of the latency. CPU locally is ruled out (3x worse). So the lever that matters is **GPU
+compute located close to Helsinki** — not GPU vs. CPU, not payload size:
+
+- Check whether Modal supports deploying this function in an EU region (their docs/support —
+  not confirmed either way here).
+- If not, other pay-per-use GPU platforms with EU regions are worth a same test (RunPod
+  serverless, Google Cloud Run with GPU, AWS SageMaker/Lambda in `eu-north-1` Stockholm — ~400km
+  from Helsinki, or `eu-central-1` Frankfurt) — any US-only GPU provider will hit the same RTT
+  tax regardless of brand, so "which provider" matters only insofar as where its GPUs actually
+  run.
+- A small always-on GPU box rented in an EU region (rather than serverless per-call) is also an
+  option if usage volume is low enough that idle time isn't wasteful — trades pay-per-use billing
+  for predictable low latency and no cold-start risk.
+- None of this has been benchmarked yet — the network-distance hypothesis is well-supported
+  (raw TCP connect ~107ms to `api.modal.com`) but the actual fix needs testing against a real
+  EU-region deployment before committing to it.
