@@ -10,7 +10,7 @@ const INFER_WIDTH = 320;
 interface Box { bbox: [number, number, number, number]; conf: number; }
 interface Timing { recv_ms: number; modal_ms: number; total_ms: number; }
 
-export default function LiveCameraPlayer({ onStop, wsPath = "/api/ws/infer" }: { onStop: () => void; wsPath?: string }) {
+export default function LiveCameraPlayer({ onStop, onActivity, wsPath = "/api/ws/infer" }: { onStop: () => void; onActivity?: () => void; wsPath?: string }) {
   const WS_URL = `${API_WS}${wsPath}`;
   const videoRef    = useRef<HTMLVideoElement>(null);
   const analyzedRef = useRef<HTMLCanvasElement>(null); // last frame actually sent to the model, with boxes burned on
@@ -55,6 +55,7 @@ export default function LiveCameraPlayer({ onStop, wsPath = "/api/ws/infer" }: {
       }
 
       const { boxes, timing } = data as { boxes: Box[]; timing: Timing };
+      onActivity?.();
       msHistory.current.push(timing.modal_ms);
       if (msHistory.current.length > 10) msHistory.current.shift();
       const avg = Math.round(msHistory.current.reduce((a, b) => a + b, 0) / msHistory.current.length);

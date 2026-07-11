@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import UploadPanel from "@/components/UploadPanel";
 import WarmupPanel from "@/components/WarmupPanel";
 import VideoPlayer from "@/components/VideoPlayer";
@@ -28,6 +28,10 @@ interface GtData {
 }
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
+// Must match scaledown_window in inference/app.py — Modal releases the GPU container
+// this long after its last request, so we bounce back to "Start Session" at the same
+// point instead of letting the user hit a surprise cold-start delay.
+const MODAL_IDLE_MS = 5 * 60 * 1000;
 
 export default function Home() {
   const [stage, setStage] = useState<Stage>("idle");
@@ -39,6 +43,29 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const gtInputRef = useRef<HTMLInputElement>(null);
+  const lastActiveRef = useRef<number>(Date.now());
+
+  function markActive() { lastActiveRef.current = Date.now(); }
+
+  // While a session is active, watch for the GPU having gone idle long enough that
+  // Modal already released the container — return to the start screen so the UI
+  // reflects reality instead of letting the next request eat a cold-start delay.
+  useEffect(() => {
+    if (stage !== "ready" && stage !== "processing") return;
+    const interval = setInterval(() => {
+      if (Date.now() - lastActiveRef.current > MODAL_IDLE_MS) {
+        fetch(`${API}/api/session/stop`, { method: "POST" }).catch(() => {});
+        setStage("idle");
+        setMode(null);
+        setResult(null);
+        setVideoUrl(null);
+        setGroundTruth(null);
+        setShowGt(false);
+        setError("Session timed out after 5 minutes idle — the GPU was released to save cost. Click Start Session to reconnect.");
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [stage]);
 
   async function handleStop() {
     setStopping(true);
@@ -64,6 +91,7 @@ export default function Home() {
         const text = await res.text();
         throw new Error(`Backend error ${res.status}: ${text}`);
       }
+      markActive();
       setStage("ready");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -95,6 +123,7 @@ export default function Home() {
       return;
     }
 
+    markActive();
     const data: InferResult = await inferRes.json();
     setResult(data);
     if (gtData) {
@@ -204,7 +233,7 @@ export default function Home() {
               <button onClick={() => setMode(null)} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
                 ← Back
               </button>
-              <RealtimePlayer onStop={() => setMode(null)} />
+              <RealtimePlayer onStop={() => setMode(null)} onActivity={markActive} />
             </div>
           )}
 
@@ -213,7 +242,7 @@ export default function Home() {
               <button onClick={() => setMode(null)} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
                 ← Back
               </button>
-              <LiveCameraPlayer onStop={() => setMode(null)} />
+              <LiveCameraPlayer onStop={() => setMode(null)} onActivity={markActive} />
             </div>
           )}
         </div>
