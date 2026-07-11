@@ -36,7 +36,7 @@ HF_FILE = "weights/best.pt"
     gpu="A100",
     image=image,
     volumes={MODELS_DIR: volume},
-    scaledown_window=60,  # container stops 60s after last request
+    scaledown_window=300,  # container stops 5min after last request — short enough to control cost, long enough to survive normal UI setup time between warmup and first frame
 )
 class PolypDetector:
 
