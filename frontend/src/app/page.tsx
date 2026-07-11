@@ -5,6 +5,7 @@ import UploadPanel from "@/components/UploadPanel";
 import WarmupPanel from "@/components/WarmupPanel";
 import VideoPlayer from "@/components/VideoPlayer";
 import RealtimePlayer from "@/components/RealtimePlayer";
+import LiveCameraPlayer from "@/components/LiveCameraPlayer";
 
 type Stage = "idle" | "warming" | "ready" | "processing" | "done";
 
@@ -30,7 +31,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 
 export default function Home() {
   const [stage, setStage] = useState<Stage>("idle");
-  const [mode, setMode] = useState<"upload" | "realtime" | null>(null);
+  const [mode, setMode] = useState<"upload" | "realtime" | "camera" | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [result, setResult] = useState<InferResult | null>(null);
   const [groundTruth, setGroundTruth] = useState<GtData | null>(null);
@@ -161,7 +162,7 @@ export default function Home() {
           </div>
 
           {mode === null && (
-            <div className="grid grid-cols-2 gap-4 pt-4">
+            <div className="grid grid-cols-3 gap-4 pt-4">
               <button
                 onClick={() => setMode("upload")}
                 className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-gray-700 hover:border-blue-500 hover:bg-blue-950/10 transition-colors text-center"
@@ -177,6 +178,14 @@ export default function Home() {
                 <span className="text-3xl">📷</span>
                 <span className="text-white font-medium">Real-time</span>
                 <span className="text-gray-500 text-sm">Frame-by-frame · ~600ms/frame</span>
+              </button>
+              <button
+                onClick={() => setMode("camera")}
+                className="flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-gray-700 hover:border-purple-500 hover:bg-purple-950/10 transition-colors text-center"
+              >
+                <span className="text-3xl">📹</span>
+                <span className="text-white font-medium">Live Camera</span>
+                <span className="text-gray-500 text-sm">Webcam, phone, or capture card</span>
               </button>
             </div>
           )}
@@ -196,6 +205,15 @@ export default function Home() {
                 ← Back
               </button>
               <RealtimePlayer onStop={() => setMode(null)} />
+            </div>
+          )}
+
+          {mode === "camera" && (
+            <div className="space-y-3">
+              <button onClick={() => setMode(null)} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
+                ← Back
+              </button>
+              <LiveCameraPlayer onStop={() => setMode(null)} />
             </div>
           )}
         </div>
