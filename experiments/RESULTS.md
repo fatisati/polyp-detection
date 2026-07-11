@@ -63,3 +63,50 @@ This run measured backend↔Modal latency in isolation (script ran on the same s
 backend). The actual browser↔backend leg (clinic device → internet → server) is a separate,
 additive cost not captured here — worth a second pass once the live-camera UI exists, run from
 a machine on the clinic's actual network path.
+
+## Part 2: is it GPU compute or invocation overhead?
+
+Added `PolypDetector.infer_frame_bench` (`inference/app.py`, benchmark-only, doesn't touch the
+production `infer_frame`/`infer_video` paths) — same work as `infer_frame` but times JPEG decode
+and the GPU forward pass *inside the container* and returns those alongside the boxes. Then
+`experiments/modal_rpc_bench.py` calls it directly through the Modal SDK (`.remote.aio()`, same
+pattern as `backend/services/modal_client.py`), bypassing FastAPI/WebSocket entirely, so it
+isolates the backend-server↔Modal leg. 30 timed calls per width, run from the server.
+
+| width | rpc mean (ms) | gpu mean (ms) | decode mean (ms) | overhead mean (ms) | overhead % |
+|---|---|---|---|---|---|
+| 160 | 255.8 | 11.7 | 0.2 | 243.9 | 95.3% |
+| 320 | 272.1 | 11.7 | 0.4 | 260.0 | 95.6% |
+| 640 | 255.7 | 10.7 | 1.1 | 243.9 | 95.4% |
+
+Raw data: `results/modal_rpc_bench_20260711_095610.csv` / `..._summary.csv`.
+
+**GPU inference is ~11ms. Decode is ~1ms. 95%+ of the latency (~245-260ms) is invocation
+overhead** — confirmed not payload size (flat across 160→640px, matching part 1).
+
+Checked whether that overhead is physical network distance: the backend server is on Hetzner in
+Helsinki, Finland; `api.modal.com` resolves to an AWS `us-east`-range IP (`54.163.156.253`).
+Raw TCP connect time from the server to `api.modal.com:443` is **~107ms** — a transatlantic hop.
+ICMP is blocked so no clean ping RTT, but the TCP-connect time alone accounts for roughly 40% of
+the total round trip; the rest is TLS + however many round trips Modal's RPC protocol needs per
+invocation (control-plane dispatch to the container, then the result).
+
+**Conclusion: the ~250ms floor is mostly the Helsinki↔US network distance, not GPU work or
+payload size.** Resizing frames (part 1) was never going to fix this — there was nothing to
+trim; the frame data isn't the bottleneck.
+
+### Options, not yet tried
+
+- **Move the backend closer to Modal's region** (or find out if Modal can run this GPU function
+  in an EU region) — this is the lever with the biggest expected payoff, since it directly
+  attacks the transatlantic RTT. Needs checking Modal's docs/support for region selection, and
+  is an infra/hosting decision, not a code change.
+- **Reduce round trips per call** if Modal's protocol allows it (e.g. a persistent
+  stream/connection instead of one invocation per frame) — would cut the multiplier on the
+  network RTT even without moving anything.
+- **Accept ~250ms as a floor** and design the UI around it (e.g. don't chase sub-200ms
+  motion-to-photon; smooth/interpolate box positions between updates instead) if moving compute
+  isn't practical.
+- Pipelining (frame N+1 sent before frame N's result returns) raises achievable fps but does
+  **not** reduce the lag of any single frame — doesn't address the "boxes lag when the camera
+  moves" complaint by itself, only throughput.
