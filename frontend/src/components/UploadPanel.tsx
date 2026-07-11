@@ -11,7 +11,7 @@ interface Props {
 export default function UploadPanel({ onUpload }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [tab, setTab] = useState<"upload" | "demo">("upload");
+  const [tab, setTab] = useState<"upload" | "demo">("demo");
   const [loadingDemo, setLoadingDemo] = useState<string | null>(null);
 
   function handleDrop(e: React.DragEvent) {

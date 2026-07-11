@@ -7,27 +7,27 @@ const API_WS = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001").repl
 const INFER_TIMEOUT_MS = 6000;
 // Resize frames to this width before sending — faster inference, smaller payload
 const INFER_WIDTH = 320;
+const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 
 interface Box { bbox: [number, number, number, number]; conf: number; }
 interface Timing { recv_ms: number; modal_ms: number; total_ms: number; }
 
 export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { onStop: () => void; wsPath?: string }) {
   const WS_URL = `${API_WS}${wsPath}`;
-  const videoRef  = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wsRef     = useRef<WebSocket | null>(null);
-  const rafRef    = useRef<number>(0);
-  const scanRef   = useRef(false); // scan loop running?
+  const videoRef    = useRef<HTMLVideoElement>(null);
+  const analyzedRef = useRef<HTMLCanvasElement>(null); // last frame actually sent to the model, with boxes burned on
+  const wsRef       = useRef<WebSocket | null>(null);
+  const scanRef     = useRef(false); // capture loop running?
 
   // Pending response promise resolver — one in-flight request at a time
   const pendingRef = useRef<((v: { boxes: Box[]; timing: Timing } | null) => void) | null>(null);
 
   const [videoUrl, setVideoUrl]   = useState<string | null>(null);
-  const [tab, setTab]             = useState<"upload" | "demo">("upload");
+  const [tab, setTab]             = useState<"upload" | "demo">("demo");
   const [dragging, setDragging]   = useState(false);
   const [wsStatus, setWsStatus]   = useState<string>("connecting");
   const [polyp, setPolyp]         = useState(false);
-  const [boxesState, setBoxes]    = useState<Box[]>([]);
+  const [speed, setSpeed]         = useState(1);
   const [stats, setStats]         = useState({ sent: 0, received: 0, avgMs: 0 });
   const [lastError, setLastError] = useState("");
   const msHistory = useRef<number[]>([]);
@@ -67,65 +67,60 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
     return () => { ws.close(); scanRef.current = false; };
   }, []);
 
-  // Canvas draw loop — full framerate
+  // Apply the chosen playback speed to whatever video is currently loaded
   useEffect(() => {
-    function draw() {
-      const video  = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas) { rafRef.current = requestAnimationFrame(draw); return; }
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  }, [speed, videoUrl]);
 
-      const w = video.videoWidth  || 560;
-      const h = video.videoHeight || 480;
-      if (canvas.width !== w)  canvas.width  = w;
-      if (canvas.height !== h) canvas.height = h;
+  // Draws the exact frame that was sent to the model, with boxes at native (capture)
+  // resolution — pixel-accurate for that frame, unlike overlaying on the live video
+  // (which has moved on by the time the result comes back).
+  function drawAnalyzedFrame(source: HTMLCanvasElement, boxes: Box[]) {
+    const canvas = analyzedRef.current;
+    if (!canvas) return;
+    if (canvas.width !== source.width)   canvas.width  = source.width;
+    if (canvas.height !== source.height) canvas.height = source.height;
 
-      const ctx = canvas.getContext("2d")!;
-      ctx.clearRect(0, 0, w, h);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(source, 0, 0);
 
-      const scale = w / INFER_WIDTH;
-      for (const det of boxesRef.current) {
-        let [x1, y1, x2, y2] = det.bbox;
-        // Scale boxes back to display resolution
-        x1 *= scale; y1 *= scale; x2 *= scale; y2 *= scale;
-        ctx.shadowColor = "#39ff14";
-        ctx.shadowBlur  = 10;
-        ctx.strokeStyle = "#39ff14";
-        ctx.lineWidth   = 3;
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.shadowBlur  = 0;
-        const label = `polyp  ${Math.round(det.conf * 100)}%`;
-        ctx.font = "bold 13px monospace";
-        const tw = ctx.measureText(label).width;
-        ctx.fillStyle = "#39ff14";
-        ctx.fillRect(x1, y1 - 20, tw + 8, 20);
-        ctx.fillStyle = "#000";
-        ctx.fillText(label, x1 + 4, y1 - 5);
-      }
-      rafRef.current = requestAnimationFrame(draw);
+    for (const det of boxes) {
+      const [x1, y1, x2, y2] = det.bbox;
+      ctx.shadowColor = "#39ff14";
+      ctx.shadowBlur  = 10;
+      ctx.strokeStyle = "#39ff14";
+      ctx.lineWidth   = 3;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.shadowBlur  = 0;
+      const label = `polyp  ${Math.round(det.conf * 100)}%`;
+      ctx.font = "bold 13px monospace";
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "#39ff14";
+      ctx.fillRect(x1, y1 - 20, tw + 8, 20);
+      ctx.fillStyle = "#000";
+      ctx.fillText(label, x1 + 4, y1 - 5);
     }
-    rafRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+  }
 
-  // Shared boxes ref for canvas — synced via setBoxes + ref
-  const boxesRef = useRef<Box[]>([]);
-  function updateBoxes(b: Box[]) { boxesRef.current = b; setBoxes(b); setPolyp(b.length > 0); }
+  function updateBoxes(b: Box[]) { setPolyp(b.length > 0); }
 
-  // Frame-step scan loop — send frame → wait for result → advance 1 frame → repeat
-  async function startScan(video: HTMLVideoElement) {
+  // Live loop — send whatever frame is currently playing → wait for result → send next.
+  // The video plays continuously (at the chosen speed); we just grab whatever frame is
+  // current each time, same pattern as the live-camera mode.
+  async function startLoop(video: HTMLVideoElement) {
     if (scanRef.current) return;
     scanRef.current = true;
-    const fps = 25; // video was made at 25fps
-    const frameDuration = 1 / fps;
-
-    video.pause();
-    video.currentTime = 0;
+    video.loop = true;
+    video.playbackRate = speed;
+    await video.play();
 
     while (scanRef.current) {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) break;
+      if (!ws || ws.readyState !== WebSocket.OPEN || !video.videoWidth) {
+        await new Promise<void>((res) => requestAnimationFrame(() => res()));
+        continue;
+      }
 
-      // Capture current frame at reduced size
       const scale = INFER_WIDTH / video.videoWidth;
       const capW  = INFER_WIDTH;
       const capH  = Math.round(video.videoHeight * scale);
@@ -137,7 +132,6 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
       const blob: Blob = await new Promise((res) => cap.toBlob((b) => res(b!), "image/jpeg", 0.85));
       const buf = await blob.arrayBuffer();
 
-      // Send and wait for response (with timeout)
       const result = await new Promise<{ boxes: Box[]; timing: Timing } | null>((resolve) => {
         pendingRef.current = resolve;
         ws.send(buf);
@@ -147,27 +141,18 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
         }, INFER_TIMEOUT_MS);
       });
 
-      if (result) updateBoxes(result.boxes);
-
-      // Advance video by 1 frame
-      const next = video.currentTime + frameDuration;
-      if (next >= video.duration) {
-        video.currentTime = 0; // loop back
-      } else {
-        video.currentTime = next;
+      // Draw the frame + its boxes together, win or lose (a timeout leaves the last good frame up)
+      if (result) {
+        updateBoxes(result.boxes);
+        drawAnalyzedFrame(cap, result.boxes);
       }
-
-      // Let the browser render the new frame before capturing again
-      await new Promise<void>((res) => requestAnimationFrame(() => res()));
     }
-
-    scanRef.current = false;
   }
 
   function handleVideoLoad() {
     const video = videoRef.current;
     if (!video) return;
-    startScan(video);
+    startLoop(video);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -223,7 +208,7 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
         <div className="space-y-4">
           {/* Tab switcher */}
           <div className="flex gap-1 border-b border-gray-800">
-            {(["upload", "demo"] as const).map((t) => (
+            {(["demo", "upload"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -250,7 +235,7 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
             >
               <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleFile} />
               <p className="text-gray-200 text-lg">Drop a colonoscopy video here</p>
-              <p className="text-gray-500 text-sm mt-2">Steps frame-by-frame — boxes always sync to current frame</p>
+              <p className="text-gray-500 text-sm mt-2">Plays continuously — right panel shows the last analyzed frame</p>
             </div>
           )}
 
@@ -262,19 +247,54 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
 
       {videoUrl && (
         <>
-          <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
-            style={{ aspectRatio: "560/480" }}>
-            <video
-              ref={videoRef}
-              src={videoUrl}
-              muted
-              onCanPlay={handleVideoLoad}
-              className="absolute inset-0 w-full h-full"
-            />
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">Live · {speed}x · no lag</p>
+              <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
+                style={{ aspectRatio: "560/480" }}>
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  muted
+                  onCanPlay={handleVideoLoad}
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs text-gray-500 uppercase tracking-wide">
+                Detected · ~{stats.avgMs || 250}ms behind live
+              </p>
+              <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
+                style={{ aspectRatio: "560/480" }}>
+                <canvas ref={analyzedRef} className="absolute inset-0 w-full h-full object-contain" />
+              </div>
+            </div>
           </div>
+
+          {/* Speed control */}
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-500">Playback speed</span>
+            <div className="flex gap-1">
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSpeed(s)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-mono transition-colors ${
+                    speed === s ? "bg-green-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                  }`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+            <span className="text-gray-600 text-xs">
+              slower playback = less motion between frames = the two panels drift apart less
+            </span>
+          </div>
+
           <button
-            onClick={() => { scanRef.current = false; setVideoUrl(null); updateBoxes([]); }}
+            onClick={() => { scanRef.current = false; setVideoUrl(null); }}
             className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
           >
             ← Load different video
@@ -283,7 +303,7 @@ export default function RealtimePlayer({ onStop, wsPath = "/api/ws/infer" }: { o
       )}
 
       <p className="text-xs text-gray-600">
-        Frames scaled to {INFER_WIDTH}px before sending · step-through synced to inference speed
+        Frames scaled to {INFER_WIDTH}px before sending · one frame in flight at a time
       </p>
     </div>
   );
