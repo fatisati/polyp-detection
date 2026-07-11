@@ -1,0 +1,4 @@
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+requests>=2.31.0
+websockets>=12.0
