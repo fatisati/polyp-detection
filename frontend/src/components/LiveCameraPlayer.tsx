@@ -280,34 +280,34 @@ export default function LiveCameraPlayer({ onStop, wsPath = "/api/ws/infer" }: {
         </div>
       )}
 
-      {streaming && (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">Live · no lag</p>
-              <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
-                style={{ aspectRatio: "560/480" }}>
-                <video ref={videoRef} muted playsInline className="absolute inset-0 w-full h-full object-cover" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <p className="text-xs text-gray-500 uppercase tracking-wide">
-                Detected · ~{stats.avgMs || 250}ms behind live
-              </p>
-              <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
-                style={{ aspectRatio: "560/480" }}>
-                <canvas ref={analyzedRef} className="absolute inset-0 w-full h-full object-contain" />
-              </div>
+      {/* Always mounted (just hidden) so the <video> node exists before `streaming` flips true —
+          otherwise startStream() has nowhere to attach the MediaStream. */}
+      <div className={streaming ? "space-y-3" : "hidden"}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Live · no lag</p>
+            <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
+              style={{ aspectRatio: "560/480" }}>
+              <video ref={videoRef} muted playsInline className="absolute inset-0 w-full h-full object-cover" />
             </div>
           </div>
+          <div className="space-y-1.5">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">
+              Detected · ~{stats.avgMs || 250}ms behind live
+            </p>
+            <div className="relative w-full rounded-xl overflow-hidden border border-gray-800 bg-black"
+              style={{ aspectRatio: "560/480" }}>
+              <canvas ref={analyzedRef} className="absolute inset-0 w-full h-full object-contain" />
+            </div>
+          </div>
+        </div>
 
-          {devices.length > 1 && deviceSelect}
+        {devices.length > 1 && deviceSelect}
 
-          <button onClick={stopCamera} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
-            ← Disconnect camera
-          </button>
-        </>
-      )}
+        <button onClick={stopCamera} className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
+          ← Disconnect camera
+        </button>
+      </div>
 
       <p className="text-xs text-gray-600">
         Frames scaled to {INFER_WIDTH}px before sending · one frame in flight at a time · ~{stats.avgMs || 250}ms round trip per frame
